@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: av
+      POSTGRES_PASSWORD: av
+      POSTGRES_DB: av_real_estate
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U av -d av_real_estate']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  postgres_data:
