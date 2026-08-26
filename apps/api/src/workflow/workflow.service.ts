@@ -29,7 +29,6 @@ const actionableOfferStatuses: OfferStatus[] = [
   OfferStatus.COUNTERED,
 ];
 
-
 @Injectable()
 export class WorkflowService {
   constructor(private readonly prisma: PrismaService) {}
@@ -54,9 +53,7 @@ export class WorkflowService {
 
   async profile(actor: Actor, input?: Record<string, string>) {
     const account = await this.account(actor);
-    if (!input) {
-      return this.prisma.profile.findUnique({ where: { accountId: account.id } });
-    }
+    if (!input) return this.prisma.profile.findUnique({ where: { accountId: account.id } });
 
     const required = ['firstName', 'lastName', 'phone', 'address'];
     const missing = required.filter((key) => !input[key]?.trim());
@@ -89,13 +86,10 @@ export class WorkflowService {
     if (!account.emailVerified) {
       throw new ForbiddenException('Verify your email before submitting identification.');
     }
-    return this.prisma.identitySubmission.create({
-      data: { accountId: account.id, fileName },
-    });
+    return this.prisma.identitySubmission.create({ data: { accountId: account.id, fileName } });
   }
 
-  
-async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
+  async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
     if (actor.role !== 'ADMIN') {
       throw new ForbiddenException('Only an administrator may review identification.');
     }
@@ -109,21 +103,16 @@ async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
       where: { id: submission.accountId },
       data: { verificationStatus: status },
     });
-    return this.prisma.identitySubmission.update({
-      where: { id: submissionId },
-      data: { status },
-    });
+    return this.prisma.identitySubmission.update({ where: { id: submissionId }, data: { status } });
   }
 
   async createListing(actor: Actor, data: any) {
     const seller = await this.account(actor);
-    if (seller.role !== 'SELLER' || seller.verificationStatus !== 'APPROVED') {
+    if (seller.role !== 'SELLER' || seller.verificationStatus !== VerificationStatus.APPROVED) {
       throw new ForbiddenException('Only verified sellers may create listings.');
     }
     this.validateListing(data);
-    return this.prisma.listing.create({
-      data: { sellerId: seller.id, ...data, askingPrice: data.askingPrice },
-    });
+    return this.prisma.listing.create({ data: { sellerId: seller.id, ...data } });
   }
 
   async updateListing(actor: Actor, id: string, data: any) {
@@ -197,7 +186,7 @@ async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
 
   async submitOffer(actor: Actor, listingId: string, terms: any, expiresAt: string) {
     const buyer = await this.account(actor);
-    if (buyer.role !== 'BUYER' || buyer.verificationStatus !== 'APPROVED') {
+    if (buyer.role !== 'BUYER' || buyer.verificationStatus !== VerificationStatus.APPROVED) {
       throw new ForbiddenException('Only verified buyers may submit offers.');
     }
     await this.listing(listingId);
@@ -211,23 +200,19 @@ async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
     const offer = await this.prisma.offer.create({
       data: { listingId, buyerId: buyer.id, terms, expiresAt: expiry },
     });
-    await this.event(offer.id, buyer.id, 'SUBMITTED', terms);
+    await this.event(offer.id, buyer.id, OfferStatus.SUBMITTED, terms);
     return offer;
   }
 
   async offers(actor: Actor, listingId: string) {
     const listing = await this.ownedListing(actor, listingId);
     return this.prisma.offer.findMany({
-      where: {
-        listingId: listing.id,
-        status: { in: actionableOfferStatuses },
-      },
+      where: { listingId: listing.id, status: { in: actionableOfferStatuses } },
       include: { history: { orderBy: { createdAt: 'asc' } } },
     });
   }
 
-  
-async respondOffer(
+  async respondOffer(
     actor: Actor,
     offerId: string,
     action: 'accept' | 'reject' | 'counter',
@@ -242,10 +227,7 @@ async respondOffer(
     if (seller.id !== offer.listing.sellerId) {
       throw new ForbiddenException('Only the listing seller may respond.');
     }
-    if (
-      offer.expiresAt <= new Date() ||
-      !actionableOfferStatuses.includes(offer.status)
-    ) {
+    if (offer.expiresAt <= new Date() || !actionableOfferStatuses.includes(offer.status)) {
       throw new BadRequestException('This offer cannot be changed.');
     }
     if (action === 'counter' && (!terms || Object.keys(terms).length === 0)) {
@@ -302,11 +284,7 @@ async respondOffer(
 
   async transaction(actor: Actor, id: string) {
     const transaction = await this.prisma.transaction.findUnique({
-      include: {
-        milestones: true,
-        agreement: true,
-        inspection: { include: { repairRequests: true } },
-      },
+      include: { milestones: true, agreement: true, inspection: { include: { repairRequests: true } } },
       where: { id },
     });
     const account = await this.account(actor);
@@ -451,7 +429,7 @@ async respondOffer(
     if (!inspection) throw new NotFoundException('Inspection workflow was not found.');
     return this.prisma.inspectionRequest.update({
       where: { transactionId },
-      data: { reportFileName: fileName },
+      data: { reportFileName: fileName, reportMimeType: mimeType },
     });
   }
 
@@ -468,7 +446,12 @@ async respondOffer(
       throw new BadRequestException('A repair request description is required.');
     }
     const request = await this.prisma.repairRequest.create({
-      data: { transactionId, description: input.description, proposedTerms: input.proposedTerms },
+      data: {
+        transactionId,
+        inspectionId: transaction.inspection.id,
+        description: input.description,
+        proposedTerms: input.proposedTerms,
+      },
     });
     await this.milestone(
       transactionId,
@@ -479,7 +462,12 @@ async respondOffer(
     return request;
   }
 
-  async respondRepair(actor: Actor, requestId: string, action: 'accept' | 'reject' | 'counter', terms?: any) {
+  async respondRepair(
+    actor: Actor,
+    requestId: string,
+    action: 'accept' | 'reject' | 'counter',
+    terms?: any,
+  ) {
     const request = await this.prisma.repairRequest.findUnique({
       include: { transaction: true },
       where: { id: requestId },
@@ -499,7 +487,11 @@ async respondOffer(
           : RepairRequestStatus.COUNTERED;
     return this.prisma.repairRequest.update({
       where: { id: requestId },
-      data: { status, ...(action === 'counter' ? { counterTerms: terms } : {}) },
+      data: {
+        status,
+        sellerResponse: action,
+        ...(action === 'counter' ? { counterTerms: terms } : {}),
+      },
     });
   }
 
@@ -519,7 +511,10 @@ async respondOffer(
       MilestoneStatus.IN_PROGRESS,
       'Confirm the closing appointment.',
     );
-    return this.prisma.transaction.update({ where: { id: transactionId }, data: { closingDate: date } });
+    return this.prisma.transaction.update({
+      where: { id: transactionId },
+      data: { closingDate: date },
+    });
   }
 
   private async ownedListing(actor: Actor, listingId: string) {
@@ -532,7 +527,7 @@ async respondOffer(
   }
 
   private validateListing(data: any) {
-    const required = ['address', 'propertyType', 'bedrooms', 'bathrooms', 'squareFeet', 'askingPrice'];
+    const required = ['address', 'bedrooms', 'bathrooms', 'squareFeet', 'askingPrice', 'description'];
     const missing = required.filter(
       (key) => data[key] === undefined || data[key] === null || data[key] === '',
     );
@@ -545,14 +540,17 @@ async respondOffer(
   }
 
   private async event(offerId: string, actorId: string, status: OfferStatus, terms?: any) {
-    return this.prisma.offerEvent.create({
-      data: { offerId, actorId, status, terms },
-    });
+    return this.prisma.offerEvent.create({ data: { offerId, actorId, status, terms } });
   }
 
   private async createTransaction(offer: any, sellerId: string) {
     const transaction = await this.prisma.transaction.create({
-      data: { offerId: offer.id, buyerId: offer.buyerId, sellerId },
+      data: {
+        offerId: offer.id,
+        listingId: offer.listingId,
+        buyerId: offer.buyerId,
+        sellerId,
+      },
     });
     await this.prisma.purchaseAgreement.create({ data: { transactionId: transaction.id } });
     await this.prisma.transactionMilestone.createMany({
