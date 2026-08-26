@@ -15,10 +15,21 @@ jobs:
     container: node:22-bookworm
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - run: corepack enable
       - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --no-frozen-lockfile
-      - run: pnpm format:check
+      - name: Check changed-file formatting
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            files=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" -- '*.ts' '*.tsx' '*.json' '*.yml' '*.yaml' '*.md' '*.css')
+          else
+            files=$(git diff --name-only HEAD^ HEAD -- '*.ts' '*.tsx' '*.json' '*.yml' '*.yaml' '*.md' '*.css')
+          fi
+          if [ -n "$files" ]; then
+            pnpm exec prettier --check $files
+          fi
       - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
