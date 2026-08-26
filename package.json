@@ -1,0 +1,21 @@
+{
+  "name": "av-real-estate-solutions",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.4",
+  "engines": { "node": ">=22.0.0", "pnpm": ">=9.15.0" },
+  "scripts": {
+    "build": "pnpm --recursive --if-present run build",
+    "dev": "pnpm --parallel --filter @av/web --filter @av/api run dev",
+    "lint": "pnpm --recursive --if-present run lint",
+    "test": "pnpm --recursive --if-present run test",
+    "typecheck": "pnpm --recursive --if-present run typecheck",
+    "format:check": "prettier --check .",
+    "format": "prettier --write .",
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @av/api prisma:migrate",
+    "db:seed": "pnpm --filter @av/api prisma:seed"
+  },
+  "devDependencies": { "prettier": "^3.4.2", "typescript": "^5.7.2" }
+}
