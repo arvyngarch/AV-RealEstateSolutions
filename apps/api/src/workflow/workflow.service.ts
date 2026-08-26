@@ -24,6 +24,12 @@ const milestones = [
   'Closing scheduling',
 ];
 
+const actionableOfferStatuses: OfferStatus[] = [
+  OfferStatus.SUBMITTED,
+  OfferStatus.COUNTERED,
+];
+
+
 @Injectable()
 export class WorkflowService {
   constructor(private readonly prisma: PrismaService) {}
@@ -88,7 +94,8 @@ export class WorkflowService {
     });
   }
 
-  async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
+  
+async reviewIdentity(actor: Actor, submissionId: string, approved: boolean) {
     if (actor.role !== 'ADMIN') {
       throw new ForbiddenException('Only an administrator may review identification.');
     }
@@ -139,11 +146,7 @@ export class WorkflowService {
       throw new BadRequestException('Only image files may be added as listing photos.');
     }
     return this.prisma.listingPhoto.create({
-      data: {
-        listingId: id,
-        ...data,
-        storageKey: `local/listings/${id}/${data.fileName}`,
-      },
+      data: { listingId: id, ...data, storageKey: `local/listings/${id}/${data.fileName}` },
     });
   }
 
@@ -168,9 +171,7 @@ export class WorkflowService {
 
   async favorite(actor: Actor, listingId: string) {
     const buyer = await this.account(actor);
-    if (buyer.role !== 'BUYER') {
-      throw new ForbiddenException('Only buyers may save favorites.');
-    }
+    if (buyer.role !== 'BUYER') throw new ForbiddenException('Only buyers may save favorites.');
     await this.listing(listingId);
     return this.prisma.savedFavorite.upsert({
       where: { buyerId_listingId: { buyerId: buyer.id, listingId } },
@@ -219,13 +220,14 @@ export class WorkflowService {
     return this.prisma.offer.findMany({
       where: {
         listingId: listing.id,
-        status: { in: [OfferStatus.SUBMITTED, OfferStatus.COUNTERED] },
+        status: { in: actionableOfferStatuses },
       },
       include: { history: { orderBy: { createdAt: 'asc' } } },
     });
   }
 
-  async respondOffer(
+  
+async respondOffer(
     actor: Actor,
     offerId: string,
     action: 'accept' | 'reject' | 'counter',
@@ -242,7 +244,7 @@ export class WorkflowService {
     }
     if (
       offer.expiresAt <= new Date() ||
-      ![OfferStatus.SUBMITTED, OfferStatus.COUNTERED].includes(offer.status)
+      !actionableOfferStatuses.includes(offer.status)
     ) {
       throw new BadRequestException('This offer cannot be changed.');
     }
@@ -277,9 +279,7 @@ export class WorkflowService {
     const updated = await this.prisma.offer.update({ where: { id: offerId }, data: { status } });
     await this.event(offerId, buyer.id, status);
     if (accept) {
-      const listing = await this.prisma.listing.findUniqueOrThrow({
-        where: { id: offer.listingId },
-      });
+      const listing = await this.prisma.listing.findUniqueOrThrow({ where: { id: offer.listingId } });
       await this.createTransaction(updated, listing.sellerId);
     }
     return updated;
@@ -293,9 +293,7 @@ export class WorkflowService {
     const account = await this.account(actor);
     if (
       !offer ||
-      (offer.buyerId !== account.id &&
-        offer.listing.sellerId !== account.id &&
-        actor.role !== 'ADMIN')
+      (offer.buyerId !== account.id && offer.listing.sellerId !== account.id && actor.role !== 'ADMIN')
     ) {
       throw new ForbiddenException('You may not view this negotiation.');
     }
@@ -349,9 +347,7 @@ export class WorkflowService {
     if (!agreement?.questionnaire) {
       throw new BadRequestException('Complete the questionnaire before generating an agreement.');
     }
-    const offer = await this.prisma.offer.findUniqueOrThrow({
-      where: { id: transaction.offerId },
-    });
+    const offer = await this.prisma.offer.findUniqueOrThrow({ where: { id: transaction.offerId } });
     const content = `Attorney-reviewed template. This document does not provide legal advice.\n\nAccepted offer terms:\n${JSON.stringify(offer.terms, null, 2)}\n\nQuestionnaire:\n${JSON.stringify(agreement.questionnaire, null, 2)}`;
     return this.prisma.purchaseAgreement.update({
       where: { transactionId },
@@ -414,12 +410,7 @@ export class WorkflowService {
       where: { transactionId },
       data: { status: AgreementStatus.SIGNED },
     });
-    await this.milestone(
-      transactionId,
-      'Purchase agreement signing',
-      MilestoneStatus.COMPLETE,
-      null,
-    );
+    await this.milestone(transactionId, 'Purchase agreement signing', MilestoneStatus.COMPLETE, null);
     return agreement;
   }
 
@@ -454,121 +445,131 @@ export class WorkflowService {
 
   async uploadReport(actor: Actor, transactionId: string, fileName: string, mimeType: string) {
     if (mimeType !== 'application/pdf') {
-      throw new BadRequestException('Inspection reports must be PDF files.');
+      throw new BadRequestException('Inspection reports must be PDF documents.');
     }
-    const inspection = await this.inspection(actor, transactionId, {});
-    if (!inspection?.appointmentAt || inspection.appointmentAt > new Date()) {
-      throw new BadRequestException(
-        'A completed inspection appointment is required before uploading a report.',
-      );
-    }
-    const updated = await this.prisma.inspectionRequest.update({
+    const inspection = await this.inspection(actor, transactionId);
+    if (!inspection) throw new NotFoundException('Inspection workflow was not found.');
+    return this.prisma.inspectionRequest.update({
       where: { transactionId },
-      data: { reportFileName: fileName, reportMimeType: mimeType },
+      data: { reportFileName: fileName },
+    });
+  }
+
+  async addRepairRequest(actor: Actor, transactionId: string, input: any) {
+    const transaction = await this.transaction(actor, transactionId);
+    const account = await this.account(actor);
+    if (account.id !== transaction.buyerId) {
+      throw new ForbiddenException('Only the buyer may submit repair requests.');
+    }
+    if (!transaction.inspection?.reportFileName) {
+      throw new BadRequestException('Upload the inspection report before proposing repairs.');
+    }
+    if (!input.description?.trim()) {
+      throw new BadRequestException('A repair request description is required.');
+    }
+    const request = await this.prisma.repairRequest.create({
+      data: { transactionId, description: input.description, proposedTerms: input.proposedTerms },
     });
     await this.milestone(
       transactionId,
       'Inspection completion',
-      MilestoneStatus.COMPLETE,
-      null,
+      MilestoneStatus.IN_PROGRESS,
+      'Review and negotiate repair requests.',
     );
-    return updated;
+    return request;
   }
 
-  async repair(actor: Actor, transactionId: string, finding: string, requestedAction: string) {
+  async respondRepair(actor: Actor, requestId: string, action: 'accept' | 'reject' | 'counter', terms?: any) {
+    const request = await this.prisma.repairRequest.findUnique({
+      include: { transaction: true },
+      where: { id: requestId },
+    });
+    const account = await this.account(actor);
+    if (!request || request.transaction.sellerId !== account.id) {
+      throw new ForbiddenException('Only the seller may respond to repair requests.');
+    }
+    if (action === 'counter' && !terms) {
+      throw new BadRequestException('Counterproposal terms are required.');
+    }
+    const status =
+      action === 'accept'
+        ? RepairRequestStatus.ACCEPTED
+        : action === 'reject'
+          ? RepairRequestStatus.REJECTED
+          : RepairRequestStatus.COUNTERED;
+    return this.prisma.repairRequest.update({
+      where: { id: requestId },
+      data: { status, ...(action === 'counter' ? { counterTerms: terms } : {}) },
+    });
+  }
+
+  async scheduleClosing(actor: Actor, transactionId: string, closingDate: string) {
     const transaction = await this.transaction(actor, transactionId);
     const account = await this.account(actor);
-    if (account.id !== transaction.buyerId || !transaction.inspection?.reportFileName) {
-      throw new ForbiddenException(
-        'Only the buyer may create repair requests from an uploaded report.',
-      );
+    if (account.id !== transaction.sellerId) {
+      throw new ForbiddenException('Only the seller may schedule closing.');
     }
-    return this.prisma.repairRequest.create({
-      data: { inspectionId: transaction.inspection.id, finding, requestedAction },
-    });
+    const date = new Date(closingDate);
+    if (Number.isNaN(+date) || date <= new Date()) {
+      throw new BadRequestException('Closing date must be in the future.');
+    }
+    await this.milestone(
+      transactionId,
+      'Closing scheduling',
+      MilestoneStatus.IN_PROGRESS,
+      'Confirm the closing appointment.',
+    );
+    return this.prisma.transaction.update({ where: { id: transactionId }, data: { closingDate: date } });
   }
 
-  async respondRepair(actor: Actor, repairId: string, sellerResponse: string) {
-    const repair = await this.prisma.repairRequest.findUnique({
-      include: { inspection: { include: { transaction: true } } },
-      where: { id: repairId },
-    });
+  private async ownedListing(actor: Actor, listingId: string) {
+    const listing = await this.prisma.listing.findUnique({ where: { id: listingId } });
     const account = await this.account(actor);
-    if (!repair || repair.inspection.transaction.sellerId !== account.id) {
-      throw new ForbiddenException('Only the seller may respond to this repair request.');
-    }
-    return this.prisma.repairRequest.update({
-      where: { id: repairId },
-      data: { sellerResponse, status: RepairRequestStatus.RESPONDED },
-    });
-  }
-
-  private validateListing(data: any) {
-    for (const key of [
-      'address',
-      'bedrooms',
-      'bathrooms',
-      'squareFeet',
-      'askingPrice',
-      'description',
-    ]) {
-      if (data[key] === undefined || data[key] === null || data[key] === '') {
-        throw new BadRequestException(`Listing ${key} is required.`);
-      }
-    }
-    if (
-      data.bedrooms < 0 ||
-      data.bathrooms < 0 ||
-      data.squareFeet <= 0 ||
-      data.askingPrice <= 0
-    ) {
-      throw new BadRequestException('Listing details must be valid.');
-    }
-  }
-
-  private async ownedListing(actor: Actor, id: string) {
-    const listing = await this.prisma.listing.findUnique({ where: { id } });
-    const account = await this.account(actor);
-    if (!listing) throw new NotFoundException('Listing was not found.');
-    if (listing.sellerId !== account.id) {
-      throw new ForbiddenException('Only the listing seller may change this listing.');
+    if (!listing || listing.sellerId !== account.id) {
+      throw new ForbiddenException('You may not manage this listing.');
     }
     return listing;
   }
 
-  private async event(offerId: string, actorId: string, action: string, detail?: any) {
-    return this.prisma.negotiationEvent.create({
-      data: { offerId, actorId, action, detail },
+  private validateListing(data: any) {
+    const required = ['address', 'propertyType', 'bedrooms', 'bathrooms', 'squareFeet', 'askingPrice'];
+    const missing = required.filter(
+      (key) => data[key] === undefined || data[key] === null || data[key] === '',
+    );
+    if (missing.length) {
+      throw new BadRequestException(`Required listing information is missing: ${missing.join(', ')}.`);
+    }
+    if (Number(data.askingPrice) <= 0) {
+      throw new BadRequestException('Asking price must be greater than zero.');
+    }
+  }
+
+  private async event(offerId: string, actorId: string, status: OfferStatus, terms?: any) {
+    return this.prisma.offerEvent.create({
+      data: { offerId, actorId, status, terms },
     });
   }
 
-  private async createTransaction(
-    offer: { id: string; listingId: string; buyerId: string },
-    sellerId: string,
-  ) {
-    return this.prisma.transaction.upsert({
-      where: { offerId: offer.id },
-      update: {},
-      create: {
-        offerId: offer.id,
-        listingId: offer.listingId,
-        buyerId: offer.buyerId,
-        sellerId,
-        milestones: { create: milestones.map((name) => ({ name })) },
-        agreement: { create: {} },
-      },
+  private async createTransaction(offer: any, sellerId: string) {
+    const transaction = await this.prisma.transaction.create({
+      data: { offerId: offer.id, buyerId: offer.buyerId, sellerId },
     });
+    await this.prisma.purchaseAgreement.create({ data: { transactionId: transaction.id } });
+    await this.prisma.transactionMilestone.createMany({
+      data: milestones.map((name) => ({ transactionId: transaction.id, name })),
+    });
+    return transaction;
   }
 
   private async milestone(
     transactionId: string,
     name: string,
     status: MilestoneStatus,
-    nextAction: string | null,
+    actionRequired: string | null,
   ) {
-    return this.prisma.milestone.update({
+    return this.prisma.transactionMilestone.update({
       where: { transactionId_name: { transactionId, name } },
-      data: { status, nextAction },
+      data: { status, actionRequired },
     });
   }
 }
