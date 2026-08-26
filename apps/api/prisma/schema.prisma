@@ -49,25 +49,28 @@ enum AgreementStatus {
 enum RepairRequestStatus {
   OPEN
   RESPONDED
+  ACCEPTED
+  REJECTED
+  COUNTERED
 }
 
 model Account {
-  id                 String             @id @default(uuid())
-  auth0Subject       String             @unique
-  email              String             @unique
-  emailVerified      Boolean            @default(false)
-  role               ParticipantRole
-  verificationStatus VerificationStatus @default(UNVERIFIED)
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-  profile            Profile?
-  identitySubmissions IdentitySubmission[]
-  listings           Listing[]          @relation("SellerListings")
-  favorites          SavedFavorite[]
-  offers             Offer[]            @relation("BuyerOffers")
-  negotiationEvents  NegotiationEvent[]
-  buyerTransactions  Transaction[]      @relation("BuyerTransactions")
-  sellerTransactions Transaction[]      @relation("SellerTransactions")
+  id                   String             @id @default(uuid())
+  auth0Subject         String             @unique
+  email                String             @unique
+  emailVerified        Boolean            @default(false)
+  role                 ParticipantRole
+  verificationStatus   VerificationStatus @default(UNVERIFIED)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  profile              Profile?
+  identitySubmissions  IdentitySubmission[]
+  listings             Listing[]          @relation("SellerListings")
+  favorites            SavedFavorite[]
+  offers               Offer[]            @relation("BuyerOffers")
+  negotiationEvents    OfferEvent[]
+  buyerTransactions    Transaction[]      @relation("BuyerTransactions")
+  sellerTransactions   Transaction[]      @relation("SellerTransactions")
 }
 
 model Profile {
@@ -142,49 +145,49 @@ model Offer {
   updatedAt DateTime    @updatedAt
   listing   Listing     @relation(fields: [listingId], references: [id], onDelete: Cascade)
   buyer     Account     @relation("BuyerOffers", fields: [buyerId], references: [id], onDelete: Cascade)
-  history   NegotiationEvent[]
+  history   OfferEvent[]
   transaction Transaction?
 }
 
-model NegotiationEvent {
-  id        String   @id @default(uuid())
+model OfferEvent {
+  id        String      @id @default(uuid())
   offerId   String
   actorId   String
-  action    String
-  detail    Json?
-  createdAt DateTime @default(now())
-  offer     Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
-  actor     Account  @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  status    OfferStatus
+  terms     Json?
+  createdAt DateTime    @default(now())
+  offer     Offer       @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  actor     Account     @relation(fields: [actorId], references: [id], onDelete: Cascade)
 }
 
 model Transaction {
-  id          String   @id @default(uuid())
-  offerId     String   @unique
-  listingId   String
-  buyerId     String
-  sellerId    String
-  closingDate DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  offer       Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
-  listing     Listing  @relation(fields: [listingId], references: [id], onDelete: Restrict)
-  buyer       Account  @relation("BuyerTransactions", fields: [buyerId], references: [id], onDelete: Restrict)
-  seller      Account  @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Restrict)
-  milestones  Milestone[]
-  agreement   PurchaseAgreement?
-  inspection  InspectionRequest?
+  id             String            @id @default(uuid())
+  offerId        String            @unique
+  listingId      String?
+  buyerId        String
+  sellerId       String
+  closingDate    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  offer          Offer             @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  listing        Listing?          @relation(fields: [listingId], references: [id], onDelete: Restrict)
+  buyer          Account           @relation("BuyerTransactions", fields: [buyerId], references: [id], onDelete: Restrict)
+  seller         Account           @relation("SellerTransactions", fields: [sellerId], references: [id], onDelete: Restrict)
+  milestones     TransactionMilestone[]
+  agreement      PurchaseAgreement?
+  inspection     InspectionRequest?
+  repairRequests RepairRequest[]
 }
 
-model Milestone {
-  id           String          @id @default(uuid())
-  transactionId String
-  name         String
-  status       MilestoneStatus @default(PENDING)
-  nextAction   String?
-  blockedBy    String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
-  transaction  Transaction     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+model TransactionMilestone {
+  id             String          @id @default(uuid())
+  transactionId  String
+  name           String
+  status         MilestoneStatus @default(PENDING)
+  actionRequired String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  transaction    Transaction     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
 
   @@unique([transactionId, name])
 }
@@ -205,25 +208,28 @@ model PurchaseAgreement {
 }
 
 model InspectionRequest {
-  id             String   @id @default(uuid())
-  transactionId  String   @unique
+  id             String          @id @default(uuid())
+  transactionId  String          @unique
   appointmentAt  DateTime?
   reportFileName String?
   reportMimeType String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  transaction    Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  transaction    Transaction     @relation(fields: [transactionId], references: [id], onDelete: Cascade)
   repairRequests RepairRequest[]
 }
 
 model RepairRequest {
   id             String              @id @default(uuid())
-  inspectionId   String
-  finding        String
-  requestedAction String
+  transactionId  String
+  inspectionId   String?
+  description    String
+  proposedTerms  Json?
   sellerResponse String?
+  counterTerms   Json?
   status         RepairRequestStatus @default(OPEN)
   createdAt      DateTime            @default(now())
   updatedAt      DateTime            @updatedAt
-  inspection     InspectionRequest   @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  transaction    Transaction         @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  inspection     InspectionRequest?  @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
 }
