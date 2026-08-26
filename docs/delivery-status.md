@@ -13,3 +13,7 @@ The current implementation branch provides the application workflow for the 20 p
 ## Production gaps intentionally left for configuration
 
 External-provider setup is described in `docs/production-configuration.md`. The local signing completion endpoint and local file metadata must not be exposed in production.
+
+## Delivery branch
+
+This branch is dedicated to the full workflow delivery pull request. It replaces the previously merged account-access foundation branch for subsequent feature delivery.
