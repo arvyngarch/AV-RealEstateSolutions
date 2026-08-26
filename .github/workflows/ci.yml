@@ -12,15 +12,11 @@ jobs:
   verify:
     name: Verify workspace
     runs-on: ubuntu-latest
+    container: node:22-bookworm
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          package-manager-cache: false
+      - run: corepack enable
+      - run: corepack prepare pnpm@9.15.4 --activate
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm format:check
       - run: pnpm build
