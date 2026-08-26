@@ -7,13 +7,12 @@ import { RequireMfaGuard } from './auth/require-mfa.guard';
 import { DevModule } from './dev/dev.module';
 import { HealthController } from './health.controller';
 import { PrismaService } from './prisma.service';
+import { WorkflowController } from './workflow/workflow.controller';
+import { WorkflowService } from './workflow/workflow.service';
 
 @Module({
-  imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }),
-    DevModule,
-  ],
-  controllers: [HealthController, AccountController],
-  providers: [PrismaService, AccountService, Auth0EnabledGuard, RequireMfaGuard],
+  imports: [ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }), DevModule],
+  controllers: [HealthController, AccountController, WorkflowController],
+  providers: [PrismaService, AccountService, Auth0EnabledGuard, RequireMfaGuard, WorkflowService],
 })
 export class AppModule {}
